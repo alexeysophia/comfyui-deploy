@@ -1327,46 +1327,30 @@ try:
     is_async = asyncio.iscoroutinefunction(origin_execute)
 
     if is_async:
-        # Check signature for backward compatibility (v0.3.67 has 10 params, v0.3.68+ has 11)
-        sig = inspect.signature(origin_execute)
-        has_ui_outputs = len(sig.parameters) >= 11
+        # Forward-compatible wrapper: accept whatever arguments the current
+        # ComfyUI version passes (v0.3.67: 10, v0.3.68+: 11, v0.35+: 12 with
+        # asset_manager, future versions: more) and pass them through unchanged.
+        async def swizzle_execute(*args, **kwargs):
+            server = args[0] if len(args) > 0 else kwargs.get("server")
+            dynprompt = args[1] if len(args) > 1 else kwargs.get("dynprompt")
+            current_item = args[3] if len(args) > 3 else kwargs.get("current_item")
+            prompt_id = args[6] if len(args) > 6 else kwargs.get("prompt_id")
 
-        async def swizzle_execute(
-            server,
-            dynprompt,
-            caches,
-            current_item,
-            extra_data,
-            executed,
-            prompt_id,
-            execution_list,
-            pending_subgraph_results,
-            pending_async_nodes,
-            ui_outputs=None,
-        ):
             unique_id = current_item
-            class_type = dynprompt.get_node(unique_id)["class_type"]
-            last_node_id = server.last_node_id
+            class_type = None
+            last_node_id = None
+            try:
+                class_type = dynprompt.get_node(unique_id)["class_type"]
+                last_node_id = server.last_node_id
+            except Exception:
+                pass
 
-            # Build args list - add ui_outputs only for v0.3.68+
-            args = [
-                server,
-                dynprompt,
-                caches,
-                current_item,
-                extra_data,
-                executed,
-                prompt_id,
-                execution_list,
-                pending_subgraph_results,
-                pending_async_nodes,
-            ]
-            if has_ui_outputs:
-                args.append(ui_outputs)
+            result = await origin_execute(*args, **kwargs)
 
-            result = await origin_execute(*args)
-
-            handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
+            try:
+                handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
+            except Exception:
+                pass
             return result
     else:
         # Sync version for very old ComfyUI versions
